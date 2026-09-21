@@ -1,0 +1,51 @@
+{
+  "input": {"explode": "batch", "inherit": ["sentAt"]},
+  "flatten": {"separator": "_", "arrays": "string", "drop_nulls": true, "drop_empty_objects": true},
+  "keys": {"normalize": "snake", "digit_prefix": "_", "on_collision": "first"},
+
+  "derive": {
+    "event_table": {
+      "from": "event", "normalize": "snake", "digit_prefix": "_",
+      "reserved": ["tracks", "identifies", "users", "pages", "screens", "groups", "aliases", "rudder_discards"],
+      "reserved_prefix": "_", "required": true,
+      "when": {"path": ["type", "$type"], "equals": "track"}
+    }
+  },
+
+  "columns": [
+    {"to": "id", "from": "messageId", "as": "string"},
+    {"to": "anonymous_id", "from": "anonymousId", "as": "string"},
+    {"to": "user_id", "from": "userId", "as": "string"},
+    {"to": "channel", "from": "channel", "as": "string"},
+    {"to": "sent_at", "from": "sentAt", "as": "string"},
+    {"to": "received_at", "from": "$now"},
+    {"to": "original_timestamp", "from": "originalTimestamp", "as": "string"},
+    {"to": "timestamp", "as": "string",
+     "from": ["timestamp", {"fn": "clock_skew", "sent": "sentAt", "original": "originalTimestamp"}, "originalTimestamp", "$now"]},
+    {"to": "event", "from": "$event_table", "when": {"path": ["type", "$type"], "equals": "track"}},
+    {"to": "event_text", "from": "event", "as": "string", "when": {"path": ["type", "$type"], "equals": "track"}},
+    {"to": "group_id", "from": "groupId", "as": "string", "when": {"path": ["type", "$type"], "equals": "group"}},
+    {"to": "previous_id", "from": "previousId", "as": "string", "when": {"path": ["type", "$type"], "equals": "alias"}},
+    {"to": "name", "from": "name", "as": "string", "quiet": true, "when": {"path": ["type", "$type"], "in": ["page", "screen"]}},
+    {"to": "category", "from": "category", "as": "string", "quiet": true, "when": {"path": ["type", "$type"], "in": ["page", "screen"]}}
+  ],
+
+  "sections": [
+    {"id": "context", "from": "context", "prefix": "context"},
+    {"id": "properties", "from": "properties", "when": {"path": ["type", "$type"], "in": ["track", "page", "screen"]}},
+    {"id": "traits", "from": "traits", "when": {"path": ["type", "$type"], "in": ["identify", "group"]}},
+    {"id": "context_traits", "from": "context.traits", "quiet": true, "when": {"path": ["type", "$type"], "equals": "identify"}}
+  ],
+
+  "outputs": [
+    {"name": "tracks", "sections": ["context"], "when": {"path": ["type", "$type"], "equals": "track"}},
+    {"name": "$event_table", "when": {"path": ["type", "$type"], "equals": "track"}},
+    {"name": "identifies", "when": {"path": ["type", "$type"], "equals": "identify"}},
+    {"name": "pages", "when": {"path": ["type", "$type"], "equals": "page"}},
+    {"name": "screens", "when": {"path": ["type", "$type"], "equals": "screen"}},
+    {"name": "groups", "when": {"path": ["type", "$type"], "equals": "group"}},
+    {"name": "aliases", "when": {"path": ["type", "$type"], "equals": "alias"}}
+  ],
+
+  "expose": ["messageId", "anonymousId", "userId"]
+}

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.24", "stable"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -count=1 ./...
+
+      - name: Test with the race detector
+        run: go test -count=1 -race ./...
+
+      - name: Fuzz Append
+        run: go test -run xxx -fuzz 'FuzzAppend$' -fuzztime 30s .
+
+      - name: Fuzz Each
+        run: go test -run xxx -fuzz 'FuzzEach$' -fuzztime 30s .

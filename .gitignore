@@ -13,6 +13,7 @@
 
 # Code coverage profiles and other test artifacts
 *.out
+*.prof
 coverage.*
 *.coverprofile
 profile.cov
@@ -23,6 +24,10 @@ profile.cov
 # Go workspace file
 go.work
 go.work.sum
+
+# Event exports used with example/. They hold real IPs and device IDs.
+*.ndjson
+*.ndjson.gz
 
 # env file
 .env

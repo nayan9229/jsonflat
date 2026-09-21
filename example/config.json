@@ -1,0 +1,11 @@
+{
+  "flatten": {"separator": "_", "arrays": "string", "drop_nulls": true, "drop_empty_objects": true},
+  "keys": {"normalize": "snake", "digit_prefix": "_", "on_collision": "first"},
+  "rules": [
+    {"op": "merge", "mode": "first", "from": ["event", "event_name"], "to": "event"},
+    {"op": "merge", "mode": "first", "from": ["context.ip", "request_ip"], "to": "context_ip"},
+    {"op": "merge", "mode": "first", "from": ["device_details.app_bundle", "d"], "to": "device_details_app_bundle"}
+  ],
+  "expose": ["message_id"],
+  "newline": true
+}

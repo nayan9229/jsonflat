@@ -5,7 +5,7 @@
 GO       ?= go
 FUZZTIME ?= 60s
 
-.PHONY: all lint fmt vet tidy staticcheck vuln actionlint doccheck test race bench fuzz docs
+.PHONY: all lint fmt vet tidy staticcheck vuln actionlint doccheck test race bench fuzz docs profile
 
 all: lint test race bench fuzz docs
 
@@ -55,3 +55,19 @@ fuzz:
 docs:
 	scripts/docs-sync.sh
 	$(GO) test -count=1 -run 'TestDocs' .
+
+## profile: CPU, memory, mutex and block profiles of the hot benchmarks into prof/, top 20 of each
+# The memory profile samples every allocation so that the one-off state
+# builds show; that makes the runtime's own profiling locks contend, so the
+# mutex and block profiles come from a second run without it.
+profile:
+	mkdir -p prof
+	for b in BenchmarkAppend BenchmarkRudderEach BenchmarkAppendParallel BenchmarkEachParallel; do \
+		$(GO) test -run xxx -bench "^$$b\$$" -benchtime 3s -o prof/$$b.test \
+			-cpuprofile prof/$$b.cpu -memprofile prof/$$b.mem -memprofilerate 1 . || exit 1; \
+		$(GO) test -run xxx -bench "^$$b\$$" -benchtime 3s \
+			-mutexprofile prof/$$b.mutex -blockprofile prof/$$b.block . || exit 1; \
+		for p in cpu mem mutex block; do \
+			echo; echo "== $$b: $$p"; $(GO) tool pprof -top -nodecount=20 prof/$$b.test prof/$$b.$$p; \
+		done; \
+	done

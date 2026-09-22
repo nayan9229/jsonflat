@@ -30,6 +30,7 @@ docs/changelog.md
 docs/_data/release.yml
 docs/_site/
 bench.txt
+prof/
 
 # Event exports used with example/. They hold real IPs and device IDs.
 *.ndjson

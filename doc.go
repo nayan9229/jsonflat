@@ -48,7 +48,11 @@
 // input.explode, and every Source). They always use "." between segments,
 // whatever flatten.separator is, and use the keys as the input spells them.
 // Output keys are what gets written (rule to, the path of a default rule,
-// column to, alias to, keys.drop) and are used exactly as given.
+// column to, alias to, keys.keep, keys.drop) and are used exactly as given.
+//
+// The full config reference, recipes and the preset documentation are at
+// https://nayan9229.github.io/jsonflat/ and in the docs/ directory of the
+// repository.
 //
 // # Guarantees
 //

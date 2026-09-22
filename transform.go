@@ -56,14 +56,15 @@ type Transformer struct {
 	dropEmptyObjects bool
 
 	// keys
-	snake        bool
-	digitPrefix  []byte
-	collision    collisionPolicy
-	segAliases   map[string][]byte
-	aliasGroups  []aliasGroup // groups with a condition in config order, then the one without
-	dropKeys     map[string]struct{}
-	dropPrefixes [][]byte
-	fixKeys      bool // some key correction is configured
+	snake       bool
+	digitPrefix []byte
+	collision   collisionPolicy
+	segAliases  map[string][]byte
+	aliasGroups []aliasGroup // groups with a condition in config order, then the one without
+	keep        keyFilter    // empty: every key is kept
+	drop        keyFilter
+	rest        []byte // column that collects what keep removed; nil: none
+	fixKeys     bool   // some key correction is configured
 
 	// input
 	explode []string
@@ -159,6 +160,7 @@ type state struct {
 	save []byte // stack of output keys replaced by a rename
 	seg  []byte // normalised key segment
 	pfx  []byte // digit-prefixed key
+	rest []byte // the keys keep removed from this row, as one JSON object
 	raw  []byte // raw JSON of one value
 	num  []byte // number text
 	idx  []byte // array index text
@@ -502,6 +504,7 @@ func (s *state) row(oi int) {
 	}
 	s.writeMerges()
 	s.writeDefaults()
+	s.writeRest()
 	if s.err != nil {
 		return
 	}
@@ -535,6 +538,7 @@ func (s *state) openRow(member []bool) int {
 	clear(s.slots)
 	clear(s.seen)
 	clear(s.colWritten)
+	s.rest = s.rest[:0]
 	s.out = append(s.out, '{')
 	s.writeColumns()
 	return 0
@@ -721,14 +725,34 @@ func (s *state) handle(v *fastjson.Value, act *action) {
 	}
 	key := s.dst
 	if t.fixKeys {
-		var ok bool
-		if key, ok = s.fixKey(key); !ok {
+		var verdict keyVerdict
+		switch key, verdict = s.fixKey(key); verdict {
+		case keyDropped:
+			return
+		case keyNotKept:
+			// A copy of an active column is a duplicate, not an unmapped key.
+			if t.rest != nil && !s.reservedBy(key) {
+				s.collect(key, v)
+			}
 			return
 		}
 	}
 	if s.claim(key) {
-		s.writeValue(v)
+		s.out = s.appendValue(s.out, v)
 	}
+}
+
+// collect adds a key that keep removed to the rest column of the row, under
+// its final name.
+func (s *state) collect(key []byte, v *fastjson.Value) {
+	if len(s.rest) == 0 {
+		s.rest = append(s.rest, '{')
+	} else {
+		s.rest = append(s.rest, ',')
+	}
+	s.rest = appendQuoted(s.rest, key)
+	s.rest = append(s.rest, ':')
+	s.rest = s.appendValue(s.rest, v)
 }
 
 // descend gets both paths ready for the children of the current node. The
@@ -742,9 +766,18 @@ func (s *state) descend() {
 	s.dst = append(s.dst, s.t.sep...)
 }
 
-// fixKey applies the full-key corrections: aliases, the digit prefix and the
-// drop list. It reports false when the key is dropped.
-func (s *state) fixKey(key []byte) ([]byte, bool) {
+// What the keep and drop lists make of a key.
+type keyVerdict uint8
+
+const (
+	keyWritten keyVerdict = iota
+	keyDropped            // matched by drop: removed on purpose
+	keyNotKept            // not in keep: unmapped, and collected when keys.rest is set
+)
+
+// fixKey applies the full-key corrections: aliases, the digit prefix, then the
+// drop and keep lists.
+func (s *state) fixKey(key []byte) ([]byte, keyVerdict) {
 	t := s.t
 	for i := range t.aliasGroups {
 		if !s.groupOn[i] {
@@ -759,30 +792,47 @@ func (s *state) fixKey(key []byte) ([]byte, bool) {
 		s.pfx = append(append(s.pfx[:0], t.digitPrefix...), key...)
 		key = s.pfx
 	}
-	if _, drop := t.dropKeys[string(key)]; drop {
-		return nil, false
+	if t.drop.matches(key) {
+		return key, keyDropped
 	}
-	for _, p := range t.dropPrefixes {
+	if !t.keep.empty() && !t.keep.matches(key) {
+		return key, keyNotKept
+	}
+	return key, keyWritten
+}
+
+// keyFilter is a set of output keys: exact names, and the prefixes of entries
+// that were written with a trailing *.
+type keyFilter struct {
+	exact    map[string]struct{}
+	prefixes [][]byte
+}
+
+func (f *keyFilter) empty() bool { return len(f.exact) == 0 && len(f.prefixes) == 0 }
+
+func (f *keyFilter) matches(key []byte) bool {
+	if _, ok := f.exact[string(key)]; ok {
+		return true
+	}
+	for _, p := range f.prefixes {
 		if bytes.HasPrefix(key, p) {
-			return nil, false
+			return true
 		}
 	}
-	return key, true
+	return false
 }
 
 // claim decides whether a flattened key, a merge result or a default may be
 // written under name, and if so writes the key.
 func (s *state) claim(name []byte) bool {
 	t := s.t
-	if t.columnIdx != nil {
-		if ci, ok := t.columnIdx[string(name)]; ok && s.reserved[ci] != nameFree {
-			// The name belongs to an active column. That is never an
-			// error, whatever the collision policy.
-			if s.reserved[ci] == nameReserved && !s.quiet {
-				s.dropped++
-			}
-			return false
+	if s.reservedBy(name) {
+		// The name belongs to an active column. That is never an error,
+		// whatever the collision policy.
+		if s.reserved[t.columnIdx[string(name)]] == nameReserved && !s.quiet {
+			s.dropped++
 		}
+		return false
 	}
 	if t.collision != collisionKeep && !s.keys.add(name) {
 		switch {
@@ -796,6 +846,15 @@ func (s *state) claim(name []byte) bool {
 	}
 	s.writeKey(name)
 	return true
+}
+
+// reservedBy reports whether an active column of this record owns name.
+func (s *state) reservedBy(name []byte) bool {
+	if s.t.columnIdx == nil {
+		return false
+	}
+	ci, ok := s.t.columnIdx[string(name)]
+	return ok && s.reserved[ci] != nameFree
 }
 
 // writeKey writes the comma, the key and the colon. Every key of a row goes
@@ -818,18 +877,23 @@ func (s *state) writeKey(name []byte) {
 
 // writeValue writes v as the value of the key just written.
 func (s *state) writeValue(v *fastjson.Value) {
+	s.out = s.appendValue(s.out, v)
+}
+
+// appendValue appends v the way a flattened leaf is written: scalars as they
+// are, containers as raw JSON, arrays as a JSON string in "string" mode. dst
+// must not be s.raw, which is scratch space here.
+func (s *state) appendValue(dst []byte, v *fastjson.Value) []byte {
 	tp := v.Type()
 	if tp != fastjson.TypeObject && tp != fastjson.TypeArray {
-		s.out = s.appendScalar(s.out, v)
-		return
+		return s.appendScalar(dst, v)
 	}
 	s.raw = s.raw[:0]
 	s.appendRaw(v)
 	if tp == fastjson.TypeArray && s.t.arrays == arraysString {
-		s.out = appendQuoted(s.out, s.raw)
-	} else {
-		s.out = append(s.out, s.raw...)
+		return appendQuoted(dst, s.raw)
 	}
+	return append(dst, s.raw...)
 }
 
 // appendNumber appends the text of the number v as it is, which keeps its
@@ -971,6 +1035,18 @@ func (s *state) mergeConcat(vals []*fastjson.Value, sep []byte) {
 	}
 	if len(s.raw) > 0 {
 		s.raw = append(s.raw, '"')
+	}
+}
+
+// writeRest writes the keys that keep removed as one JSON string, at the end
+// of the row, when keys.rest is set and something was removed.
+func (s *state) writeRest() {
+	if len(s.rest) == 0 || s.err != nil {
+		return
+	}
+	s.rest = append(s.rest, '}')
+	if s.claim(s.t.rest) {
+		s.out = appendQuoted(s.out, s.rest)
 	}
 }
 

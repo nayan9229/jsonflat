@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/nayan9229/jsonflat/security/advisories/new
+    about: Please report vulnerabilities privately, not as an issue. See SECURITY.md.
+  - name: Question or discussion
+    url: https://github.com/nayan9229/jsonflat/discussions
+    about: How to express something in a config, or anything that is not a bug or a feature.

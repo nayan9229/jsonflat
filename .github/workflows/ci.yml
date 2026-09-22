@@ -1,40 +1,121 @@
+# Development checks: every branch push and every pull request. Tags are
+# handled by release.yml alone; a `branches` filter without `tags` means tag
+# pushes never start this workflow.
+#
+# The five jobs below are the same in release.yml. The commands live in
+# scripts/ and the Makefile, and scripts/doc-check.sh fails when the pinned
+# tool versions differ between the two workflows and the Makefile.
 name: CI
 
 on:
   push:
+    branches: ["**"]
   pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: true
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: go vet
+        run: go vet ./...
+      - name: go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - name: actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Documentation
+        run: scripts/doc-check.sh
+
+  test:
+    name: Test (${{ matrix.os }}, Go ${{ matrix.go }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        go: ["1.24", "stable"]
+        include:
+          - { os: ubuntu-latest, go: "1.24" }
+          - { os: ubuntu-latest, go: stable }
+          - { os: macos-latest, go: stable }
+          - { os: windows-latest, go: stable }
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go }}
-
-      - name: gofmt
-        run: test -z "$(gofmt -l .)"
-
-      - name: go vet
-        run: go vet ./...
-
+          cache: true
       - name: Test
         run: go test -count=1 ./...
-
       - name: Test with the race detector
+        if: runner.os != 'Windows'
         run: go test -count=1 -race ./...
 
-      - name: Fuzz Append
-        run: go test -run xxx -fuzz 'FuzzAppend$' -fuzztime 30s .
+  bench:
+    name: Zero allocations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: true
+      - name: Benchmarks must report 0 allocs/op
+        run: scripts/check-allocs.sh bench.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench
+          path: bench.txt
 
-      - name: Fuzz Each
+  fuzz:
+    name: Fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: true
+      - name: FuzzAppend
+        run: go test -run xxx -fuzz 'FuzzAppend$' -fuzztime 30s .
+      - name: FuzzEach
         run: go test -run xxx -fuzz 'FuzzEach$' -fuzztime 30s .
+
+  build:
+    name: Build everywhere
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: true
+      - name: go build
+        run: go build ./...
+      - name: Cross-compile
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
+            echo "== $target"
+            GOOS=${target%/*} GOARCH=${target#*/} go build ./...
+          done

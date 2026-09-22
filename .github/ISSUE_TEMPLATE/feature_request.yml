@@ -1,0 +1,43 @@
+name: Feature request
+description: Something the config language or the API cannot express yet.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        jsonflat has one general engine and vendor layouts are configs. A new feature is
+        usually a new config field, so please describe the transformation you need,
+        with input and wanted output; we will find the general form together.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The pipeline, the producer of the JSON, and where the rows go.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Input and wanted output
+      description: One realistic input document and the exact row(s) you want from it.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: What happens with the current config language?
+      description: The closest config you found, and where it falls short.
+      render: json
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed config or API (optional)
+      description: A sketch of the field or function you have in mind.
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints you are aware of
+      options:
+        - label: The hot path must stay allocation-free.
+        - label: The engine stays vendor-neutral; vendor-specific layouts are presets.

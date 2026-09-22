@@ -83,4 +83,5 @@ func ValidNumber(s []byte) bool {
 	return i == len(s)
 }
 
+// IsDigit reports whether c is an ASCII digit.
 func IsDigit(c byte) bool { return c >= '0' && c <= '9' }

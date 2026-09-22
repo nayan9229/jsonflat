@@ -38,8 +38,8 @@ dependency.
     missing capability becomes a general config feature.
 
 Verbatim files, do not reformat: `internal/jsonenc/jsonenc.go`, `names.go`,
-the type declarations at the top of `config.go`, `presets/presets.go`,
-`presets/rudderstack.json`.
+the type declarations at the top of `config.go` (extended once, by
+`KeysConfig.Keep`), `presets/presets.go`, `presets/rudderstack.json`.
 
 ## Working rules
 
@@ -57,9 +57,14 @@ the type declarations at the top of `config.go`, `presets/presets.go`,
   cite the page in a comment.
 - Two kinds of path: source paths always use "."; output keys are used as
   given and joined with `flatten.separator`.
-- Do not tag releases.
+- Every documented behaviour has a worked example in `docs/` or `README.md`;
+  `docs_test.go` compiles every ```json block and replays every ```example
+  block, so update the docs with the code.
+- Do not tag releases; RELEASING.md is the maintainer's procedure.
 
 ## Commands that must all pass
+
+`make all` runs everything below with the same pinned tools as CI.
 
 ```
 gofmt -l .                                   # prints nothing

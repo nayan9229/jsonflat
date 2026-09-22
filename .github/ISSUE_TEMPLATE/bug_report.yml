@@ -1,0 +1,60 @@
+name: Bug report
+description: Wrong output, an error that should not happen, a panic, or an allocation on the hot path.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A config and an input that reproduce the problem let us
+        turn it into a test case straight away. Remove anything private from them first.
+  - type: input
+    id: version
+    attributes:
+      label: jsonflat version
+      description: The tag from `go list -m github.com/nayan9229/jsonflat`, or the commit.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: input
+    id: go
+    attributes:
+      label: Go version and OS
+      placeholder: go1.24.3 darwin/arm64
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Config
+      description: The JSON config, or the Go `Config` value, as compiled.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: Input document
+      description: The smallest input that shows the problem.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected output
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: got
+    attributes:
+      label: What happened instead
+      description: The output, the error text, or the panic with its stack trace.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: How you call the package (Append or Each, Options), how often it happens, what you have tried.

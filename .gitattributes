@@ -1,0 +1,5 @@
+# Go source and scripts are checked in with LF line endings on every platform,
+# so gofmt and shellcheck see the same bytes on Windows runners.
+* text=auto eol=lf
+*.png binary
+*.gz binary

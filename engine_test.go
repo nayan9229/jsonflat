@@ -217,6 +217,17 @@ func TestConfigValidation(t *testing.T) {
 
 		{"empty inherit key", `{"input":{"inherit":[""]}}`},
 		{"empty drop key", `{"keys":{"drop":[""]}}`},
+		{"drop key listed twice", `{"keys":{"drop":["a","a"]}}`},
+		{"empty keep key", `{"keys":{"keep":[""]}}`},
+		{"keep everything", `{"keys":{"keep":["*"]}}`},
+		{"keep key listed twice", `{"keys":{"keep":["a","a"]}}`},
+		{"same key kept and dropped", `{"keys":{"keep":["a","b"],"drop":["b"]}}`},
+		{"alias to a key that is not kept", `{"keys":{"keep":["x"],"aliases":[{"to":"y","from":["z"]}]}}`},
+		{"alias to a dropped key", `{"keys":{"drop":["y"],"aliases":[{"to":"y","from":["z"]}]}}`},
+		{"alias to a key under a dropped prefix", `{"keys":{"drop":["internal_*"],"aliases":[{"to":"internal_id","from":["z"]}]}}`},
+		{"rest without keep", `{"keys":{"rest":"extra"}}`},
+		{"rest named like a column", `{"columns":[{"to":"extra","from":"x"}],"keys":{"keep":["a"],"rest":"extra"}}`},
+		{"alias to the rest column", `{"keys":{"keep":["a","extra"],"rest":"extra","aliases":[{"to":"extra","from":["z"]}]}}`},
 		{"segment alias to nothing", `{"keys":{"segment_aliases":{"a":""}}}`},
 		{"segment alias to itself", `{"keys":{"segment_aliases":{"a":"a"}}}`},
 		{"segment alias that normalises to nothing", `{"keys":{"normalize":"snake","segment_aliases":{"$$":"a"}}}`},
@@ -336,6 +347,64 @@ func TestFlattenEdgeCases(t *testing.T) {
 		config: `{"newline":true}`,
 		in:     `{"a":1}`,
 		want:   "{\"a\":1}\n",
+	}, {
+		name:   "keep: exact names and prefixes, array indices included",
+		config: `{"flatten":{"separator":"_"},"keys":{"normalize":"snake","keep":["user_id","tags_*"]}}`,
+		in:     `{"userId":1,"tags":["a","b"],"x":{"y":2},"tagsx":3}`,
+		want:   `{"user_id":1,"tags_0":"a","tags_1":"b"}`,
+	}, {
+		name:   "keep and drop together: the family minus one",
+		config: `{"flatten":{"separator":"_"},"keys":{"keep":["context_*"],"drop":["context_ip"]}}`,
+		in:     `{"context":{"ip":"1.2.3.4","app":{"name":"Shop"}},"event":"x"}`,
+		want:   `{"context_app_name":"Shop"}`,
+	}, {
+		name: "keep is matched after aliases and the digit prefix",
+		config: `{"flatten":{"separator":"_"},"keys":{"normalize":"snake","digit_prefix":"_",
+		          "aliases":[{"to":"address_zip","from":["address_postcode"]}],"keep":["address_zip","_2fa"]}}`,
+		in:   `{"address":{"postcode":"38","city":"A"},"2fa":true}`,
+		want: `{"address_zip":"38","_2fa":true}`,
+	}, {
+		name: "columns, merge results and defaults are written whether kept or not",
+		config: `{"keys":{"keep":["a"]},"columns":[{"to":"id","from":"id"}],
+		          "rules":[{"op":"merge","from":["x","y"],"to":"xy"},{"op":"default","path":"env","value":"p"}]}`,
+		in:   `{"id":1,"a":2,"b":3,"x":"1","y":"2"}`,
+		want: `{"id":1,"a":2,"xy":"12","env":"p"}`,
+	}, {
+		name:   "a key that keep removes takes no part in collisions",
+		config: `{"keys":{"normalize":"snake","on_collision":"error","keep":["x"]}}`,
+		in:     `{"aB":1,"a_b":2,"x":3}`,
+		want:   `{"x":3}`,
+	}, {
+		name:   "keep on a root array",
+		config: `{"keys":{"keep":["0"]}}`,
+		in:     `[1,2]`,
+		want:   `{"0":1}`,
+	}, {
+		name: "rest collects what keep removed, under final names, as one JSON string",
+		config: `{"flatten":{"separator":"_"},"keys":{"normalize":"snake","digit_prefix":"_",
+		          "aliases":[{"to":"zip","from":["address_postcode"]}],"keep":["user_id","zip"],"rest":"extra"}}`,
+		in:   `{"userId":1,"address":{"postcode":"38","city":"A"},"2fa":true,"tags":["x"]}`,
+		want: `{"user_id":1,"zip":"38","extra":"{\"address_city\":\"A\",\"_2fa\":true,\"tags_0\":\"x\"}"}`,
+	}, {
+		name:   "rest takes nothing that drop or a column removed",
+		config: `{"keys":{"keep":["a"],"drop":["b"],"rest":"extra"},"columns":[{"to":"c","from":"c"}]}`,
+		in:     `{"c":1,"a":2,"b":3,"c":9,"d":{"e":null}}`,
+		want:   `{"c":1,"a":2,"extra":"{\"d.e\":null}"}`,
+	}, {
+		name:   "rest keeps duplicates as they come",
+		config: `{"keys":{"keep":["a"],"on_collision":"first","rest":"extra"}}`,
+		in:     `{"a":1,"x":1,"x":2}`,
+		want:   `{"a":1,"extra":"{\"x\":1,\"x\":2}"}`,
+	}, {
+		name:   "rest is absent when nothing was removed",
+		config: `{"keys":{"keep":["a"],"rest":"extra"}}`,
+		in:     `{"a":1}`,
+		want:   `{"a":1}`,
+	}, {
+		name:   "rest keeps the string form of arrays",
+		config: `{"flatten":{"arrays":"string"},"keys":{"keep":["a"],"rest":"extra"}}`,
+		in:     `{"a":1,"t":[1,"x"]}`,
+		want:   `{"a":1,"extra":"{\"t\":\"[1,\\\"x\\\"]\"}"}`,
 	}}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -347,6 +416,55 @@ func TestFlattenEdgeCases(t *testing.T) {
 				t.Errorf("\n got: %s\nwant: %s", rows[0].json, tc.want)
 			}
 		})
+	}
+}
+
+// With rest set, rows cannot extend the previous row (the rest column sits at
+// the end); the output must still be what a fresh build gives, per output.
+func TestRestPerOutput(t *testing.T) {
+	config := `{
+	  "keys": {"keep": ["x"], "rest": "extra"},
+	  "sections": [{"id": "a", "from": "a"}, {"id": "b", "from": "b"}],
+	  "outputs": [{"name": "a", "sections": ["a"]}, {"name": "all"}]}`
+	rows := each(t, config, `{"a":{"x":1,"p":2},"b":{"y":3}}`, Options{})
+	want := []string{
+		`a|{"x":1,"extra":"{\"p\":2}"}`,
+		`all|{"x":1,"extra":"{\"p\":2,\"y\":3}"}`,
+	}
+	for i, w := range want {
+		if got := rows[i].name + "|" + rows[i].json; got != w {
+			t.Errorf("row %d\n got: %s\nwant: %s", i, got, w)
+		}
+	}
+}
+
+// Keys that keep removes are silent: not counted, not an error.
+func TestKeepIsSilent(t *testing.T) {
+	rows := each(t, `{"keys":{"on_collision":"first","keep":["a"]},"columns":[{"to":"c","from":"c"}]}`,
+		`{"a":1,"b":2,"c":3}`, Options{})
+	if rows[0].json != `{"c":3,"a":1}` || rows[0].dropped != 0 || rows[0].err != nil {
+		t.Errorf("got %+v", rows[0])
+	}
+}
+
+// The filters are on the hot path, so they must not allocate either.
+func TestKeepZeroAllocs(t *testing.T) {
+	if raceEnabled {
+		t.Skip("the race detector makes sync.Pool drop items, which allocates")
+	}
+	tr := MustCompile([]byte(`{"flatten":{"separator":"_"},"keys":{"normalize":"snake",
+	  "keep":["user_*","order_id","geo_city","http_*"],"drop":["http_ms"],"rest":"extra"}}`))
+	src := []byte(benchDoc)
+	out, err := tr.Append(nil, src)
+	if err != nil || !strings.HasPrefix(string(out), `{"user_id":48213,`) || strings.Contains(string(out), "http_ms") ||
+		!strings.Contains(string(out), `,"extra":"{\"ts\":`) {
+		t.Fatalf("unexpected output: %s %v", out, err)
+	}
+	allocs := testing.AllocsPerRun(200, func() {
+		out, _ = tr.Append(out[:0], src)
+	})
+	if allocs != 0 {
+		t.Fatalf("Append with keep allocates %v times per call, want 0", allocs)
 	}
 }
 

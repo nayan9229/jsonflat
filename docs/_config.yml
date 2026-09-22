@@ -1,0 +1,38 @@
+# Jekyll configuration for the docs site, built by .github/workflows/release.yml
+# with actions/jekyll-build-pages and published to GitHub Pages.
+#
+# The theme is fetched at build time and pinned to a tag. If it ever fails to
+# fetch, replace the remote_theme line with `theme: minima`; the pages do not
+# depend on the theme.
+title: jsonflat
+description: Zero-allocation JSON flattening and transformation for Go, driven by a JSON config.
+url: https://nayan9229.github.io
+baseurl: /jsonflat
+permalink: pretty
+
+remote_theme: just-the-docs/just-the-docs@v0.12.0
+plugins:
+  - jekyll-remote-theme
+  - jekyll-seo-tag
+
+search_enabled: true
+heading_anchors: true
+color_scheme: light
+
+aux_links:
+  GitHub: https://github.com/nayan9229/jsonflat
+  pkg.go.dev: https://pkg.go.dev/github.com/nayan9229/jsonflat
+aux_links_new_tab: true
+
+footer_content: 'jsonflat is MIT licensed. Docs source: <a href="https://github.com/nayan9229/jsonflat/tree/main/docs">docs/</a>.'
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+
+exclude:
+  - _site
+  - Gemfile
+  - Gemfile.lock

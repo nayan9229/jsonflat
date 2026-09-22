@@ -2,7 +2,8 @@
 
 ## Supported versions
 
-Security fixes go into the latest released minor version.
+Security fixes go into the latest release. Before `v1.0.0`, that is the newest
+`v0.x` tag; older minors are not patched.
 
 ## Reporting a vulnerability
 
@@ -11,7 +12,9 @@ Please do not open a public issue. Report privately through GitHub:
 <https://github.com/nayan9229/jsonflat/security/advisories/new>.
 
 Include the config, an input that triggers the problem, and what you observed.
-You can expect a first answer within a week.
+You can expect a first answer within a week. A fix is released as a patch
+version with a changelog entry that credits the reporter, unless you prefer
+otherwise.
 
 ## What counts
 
@@ -35,3 +38,9 @@ You can expect a first answer within a week.
   keys of a record could, with considerable effort, construct two different
   keys with the same hash, and the second would be treated as a duplicate of
   the first. The effect is limited to that one row.
+
+## Dependencies
+
+The only dependency is `github.com/valyala/fastjson`. `govulncheck` runs in CI
+and before every release; Dependabot opens a pull request for dependency and
+GitHub Actions updates weekly.

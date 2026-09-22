@@ -92,6 +92,14 @@ type KeysConfig struct {
 	Aliases []Alias `json:"aliases,omitempty"`
 	// Drop lists output keys to leave out. A trailing * matches a prefix.
 	Drop []string `json:"drop,omitempty"`
+	// Keep lists the output keys to write; every other flattened key is left
+	// out. Empty keeps all. A trailing * matches a prefix. A key must match
+	// Keep and not match Drop.
+	Keep []string `json:"keep,omitempty"`
+	// Rest names a column that collects the keys Keep left out, as a JSON
+	// string of one flat object, so that nothing is lost. Written at the end
+	// of the row, only when something was left out. Needs Keep.
+	Rest string `json:"rest,omitempty"`
 }
 
 // Alias maps wrong output keys to the right one. With snake normalisation the
@@ -291,7 +299,7 @@ func New(cfg Config) (*Transformer, error) {
 	// columns, sections need the drop rules, outputs need the sections.
 	steps := []func() error{
 		c.flatten, c.input, c.derive, c.columns,
-		c.keyPolicy, c.segmentAliases, c.aliases, c.keyDrops,
+		c.keyPolicy, c.keyFilters, c.segmentAliases, c.aliases,
 		c.rules, c.sections, c.outputs, c.expose,
 	}
 	for _, step := range steps {
@@ -303,11 +311,11 @@ func New(cfg Config) (*Transformer, error) {
 	t := c.t
 	t.newline = cfg.Newline
 	t.fixKeys = t.snake || t.segAliases != nil || len(t.aliasGroups) > 0 ||
-		len(t.digitPrefix) > 0 || len(cfg.Keys.Drop) > 0
+		len(t.digitPrefix) > 0 || !t.keep.empty() || !t.drop.empty()
 	t.simple = t.explode == nil && !t.named
 	// A row can start as a copy of the previous one only when nothing is
 	// written after the sections.
-	t.extend = len(t.merges) == 0 && len(t.defaults) == 0
+	t.extend = len(t.merges) == 0 && len(t.defaults) == 0 && t.rest == nil
 	t.pool.New = func() any { return newState(t) }
 	return t, nil
 }
@@ -835,6 +843,17 @@ func (c *compiler) alias(a Alias, group map[string][]byte) error {
 	if _, isColumn := c.t.columnIdx[a.To]; isColumn {
 		return fmt.Errorf("%q is a column", a.To)
 	}
+	// An alias to a key that the filters remove would never be written.
+	to := []byte(a.To)
+	if !c.t.keep.empty() && !c.t.keep.matches(to) {
+		return fmt.Errorf("to %q is not in keys.keep", a.To)
+	}
+	if c.t.drop.matches(to) {
+		return fmt.Errorf("to %q is in keys.drop", a.To)
+	}
+	if c.t.rest != nil && a.To == string(c.t.rest) {
+		return fmt.Errorf("to %q is keys.rest", a.To)
+	}
 	for _, from := range a.From {
 		norm := c.normKey(from)
 		switch {
@@ -851,22 +870,54 @@ func (c *compiler) alias(a Alias, group map[string][]byte) error {
 	return nil
 }
 
-func (c *compiler) keyDrops() error {
-	t := c.t
-	for _, d := range c.cfg.Keys.Drop {
-		if d == "" || d == "*" {
-			return fmt.Errorf("keys.drop: %q would drop every key", d)
+func (c *compiler) keyFilters() error {
+	k, t := c.cfg.Keys, c.t
+	var err error
+	if t.keep, err = compileKeyFilter("keys.keep", k.Keep); err != nil {
+		return err
+	}
+	if t.drop, err = compileKeyFilter("keys.drop", k.Drop); err != nil {
+		return err
+	}
+	for _, entry := range k.Keep {
+		if _, dropped := t.drop.exact[entry]; dropped {
+			return fmt.Errorf("keys.keep: %q is also in keys.drop", entry)
 		}
-		if prefix, ok := strings.CutSuffix(d, "*"); ok {
-			t.dropPrefixes = append(t.dropPrefixes, []byte(prefix))
-			continue
+	}
+	if k.Rest != "" {
+		if t.keep.empty() {
+			return errors.New("keys.rest: needs keys.keep; without a whitelist nothing is left out")
 		}
-		if t.dropKeys == nil {
-			t.dropKeys = map[string]struct{}{}
+		if _, isColumn := t.columnIdx[k.Rest]; isColumn {
+			return fmt.Errorf("keys.rest: %q is a column", k.Rest)
 		}
-		t.dropKeys[d] = struct{}{}
+		t.rest = []byte(k.Rest)
 	}
 	return nil
+}
+
+func compileKeyFilter(field string, entries []string) (keyFilter, error) {
+	var f keyFilter
+	if len(entries) == 0 {
+		return f, nil
+	}
+	f.exact = make(map[string]struct{}, len(entries))
+	seen := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		if entry == "" || entry == "*" {
+			return f, fmt.Errorf("%s: %q matches every key", field, entry)
+		}
+		if seen[entry] {
+			return f, fmt.Errorf("%s: %q is listed twice", field, entry)
+		}
+		seen[entry] = true
+		if prefix, ok := strings.CutSuffix(entry, "*"); ok {
+			f.prefixes = append(f.prefixes, []byte(prefix))
+		} else {
+			f.exact[entry] = struct{}{}
+		}
+	}
+	return f, nil
 }
 
 func (c *compiler) action(path string) *action {

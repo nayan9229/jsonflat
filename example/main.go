@@ -1,8 +1,15 @@
-// Command example flattens an NDJSON event export with jsonflat: one flat JSON
-// row per input line, with duplicate keys and duplicate fields merged by the
-// config in config.json.
+// Command example flattens RudderStack-style track events with jsonflat: one
+// flat JSON row per event, with the standard fields as columns and duplicate
+// keys and duplicate fields merged by the config in config.json.
 //
-//	go run ./example -in events.ndjson.gz -out flat.ndjson
+// Without flags it runs over the seven sample events in sample-events.jsonl
+// and prints the rows to the console:
+//
+//	go run ./example
+//	go run ./example -pretty
+//
+// It also reads an NDJSON file or stream, gzip or plain:
+//
 //	go run ./example -in events.ndjson.gz -out flat.ndjson -verify
 //	gzip -dc events.ndjson.gz | go run ./example -in - > flat.ndjson
 //
@@ -31,6 +38,9 @@ import (
 //go:embed config.json
 var defaultConfig []byte
 
+//go:embed sample-events.jsonl
+var sampleEvents []byte
+
 // maxLine is the longest input line accepted. Memory use follows the largest
 // document, so a cap belongs in front of jsonflat anyway.
 const maxLine = 8 << 20
@@ -41,19 +51,21 @@ const maxSamples = 5
 type options struct {
 	in, out, config string
 	verify, columns bool
+	pretty          bool
 	limit           int
 }
 
 func main() {
 	var o options
-	flag.StringVar(&o.in, "in", "", "input NDJSON file, gzip or plain; - for stdin")
+	flag.StringVar(&o.in, "in", "", "input NDJSON file, gzip or plain; - for stdin (default: the bundled sample events)")
 	flag.StringVar(&o.out, "out", "-", "output NDJSON file; - for stdout")
 	flag.StringVar(&o.config, "config", "", "jsonflat config file (default: the embedded config.json)")
+	flag.BoolVar(&o.pretty, "pretty", false, "indent every row, for reading on a console")
 	flag.BoolVar(&o.verify, "verify", false, "check every row: valid JSON, no repeated key (slow)")
 	flag.BoolVar(&o.columns, "columns", false, "with -verify, list every column")
 	flag.IntVar(&o.limit, "limit", 0, "stop after this many lines; 0 means all")
 	flag.Parse()
-	if o.in == "" || flag.NArg() > 0 {
+	if flag.NArg() > 0 {
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -77,11 +89,15 @@ func run(o options) error {
 		return err
 	}
 
-	in, closeIn, err := openInput(o.in)
-	if err != nil {
-		return err
+	var in io.Reader = bytes.NewReader(sampleEvents)
+	if o.in != "" {
+		file, closeIn, err := openInput(o.in)
+		if err != nil {
+			return err
+		}
+		defer closeIn()
+		in = file
 	}
-	defer closeIn()
 
 	out := os.Stdout
 	if o.out != "-" {
@@ -91,7 +107,7 @@ func run(o options) error {
 	}
 
 	start := time.Now()
-	st, err := flatten(in, out, t, o.verify, o.limit)
+	st, err := flatten(in, out, t, o)
 	elapsed := time.Since(start)
 	if out != os.Stdout {
 		if cerr := out.Close(); err == nil {
@@ -152,27 +168,28 @@ func (st *stats) sample(format string, args ...any) {
 // flatten turns every line of in into a row on out. A bad line or a bad
 // record is counted and the run carries on. It stops for an I/O error and for
 // a line longer than maxLine.
-func flatten(in io.Reader, out io.Writer, t *jsonflat.Transformer, verify bool, limit int) (*stats, error) {
+func flatten(in io.Reader, out io.Writer, t *jsonflat.Transformer, o options) (*stats, error) {
 	st := &stats{recordErrs: map[string]int{}}
 	var rowKeys map[string]struct{}
-	if verify {
+	if o.verify {
 		st.columns = map[string]int{}
 		rowKeys = map[string]struct{}{}
 	}
 
 	w := bufio.NewWriterSize(out, 1<<20)
 	var writeErr error
+	var indented bytes.Buffer
 	lineNo := 0 // position in the file, blank lines included
 
 	// The callback is created once, outside the loop, so the loop itself
-	// does not allocate.
+	// does not allocate (unless -pretty asks for indentation).
 	onRecord := func(r *jsonflat.Record) error {
 		if r.Err != nil {
 			st.recordErrs[kind(r.Err)]++
 			st.sample("line %d (%s): %v", lineNo, id(r), r.Err)
 			return nil
 		}
-		if verify {
+		if o.verify {
 			if err := checkRow(r.JSON, rowKeys, st.columns); err != nil {
 				st.invalid++
 				st.sample("line %d (%s): bad row: %v", lineNo, id(r), err)
@@ -181,7 +198,16 @@ func flatten(in io.Reader, out io.Writer, t *jsonflat.Transformer, verify bool, 
 		}
 		// r.JSON is only valid until this function returns. The writer
 		// copies it.
-		if _, err := w.Write(r.JSON); err != nil {
+		row := r.JSON
+		if o.pretty {
+			indented.Reset()
+			if err := json.Indent(&indented, bytes.TrimRight(r.JSON, "\n"), "", "  "); err != nil {
+				return err
+			}
+			indented.WriteByte('\n')
+			row = indented.Bytes()
+		}
+		if _, err := w.Write(row); err != nil {
 			writeErr = err
 			return err
 		}
@@ -199,7 +225,7 @@ func flatten(in io.Reader, out io.Writer, t *jsonflat.Transformer, verify bool, 
 		if len(line) == 0 {
 			continue
 		}
-		if limit > 0 && st.lines == limit {
+		if o.limit > 0 && st.lines == o.limit {
 			break
 		}
 		st.lines++

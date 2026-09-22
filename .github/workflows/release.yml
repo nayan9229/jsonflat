@@ -190,7 +190,7 @@ jobs:
         run: |
           {
             cat release-notes.md
-            printf '\n## Install\n\n```\ngo get %s@%s\n```\n\nAPI reference: https://pkg.go.dev/%s@%s\n' \
+            printf '\n## Install\n\n    go get %s@%s\n\nAPI reference: https://pkg.go.dev/%s@%s\n' \
               "$MODULE" "$TAG" "$MODULE" "$TAG"
           } > body.md
           if gh release view "$TAG" >/dev/null 2>&1; then

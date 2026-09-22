@@ -111,8 +111,15 @@ config language, as the README's versioning policy says.
 Set by hand; a workflow cannot do these with the default token.
 
 - **Pages**: Settings → Pages → Build and deployment → Source: **GitHub
-  Actions**. The first release run creates the `github-pages` environment.
-  Site URL: `https://nayan9229.github.io/jsonflat/`.
+  Actions** (or `gh api -X POST repos/OWNER/REPO/pages -f build_type=workflow`).
+  Enabling Pages creates a `github-pages` environment whose deployment policy
+  allows only the default branch, and the docs job runs on a tag, so add a
+  tag rule: Settings → Environments → github-pages → Deployment branches and
+  tags → add tag `v*` (or
+  `gh api -X POST repos/OWNER/REPO/environments/github-pages/deployment-branch-policies -f name='v*' -f type=tag`).
+  Without it the job fails with "Tag … is not allowed to deploy to
+  github-pages". Both were done for v0.1.0. Site URL:
+  `https://nayan9229.github.io/jsonflat/`.
 - **About**: the description and topics are at the top of `README.md` in an
   HTML comment.
 - **Branch protection** on `main`: require the CI workflow's jobs to pass,

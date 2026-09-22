@@ -59,7 +59,7 @@ type Transformer struct {
 	snake       bool
 	digitPrefix []byte
 	collision   collisionPolicy
-	segAliases  map[string][]byte
+	segAliases  strMap[[]byte]
 	aliasGroups []aliasGroup // groups with a condition in config order, then the one without
 	keep        keyFilter    // empty: every key is kept
 	drop        keyFilter
@@ -73,18 +73,18 @@ type Transformer struct {
 	derived    []derived
 	derivedIdx map[string]int
 	columns    []column
-	columnIdx  map[string]int // column name -> index of the name
-	sections   []section      // never empty: without sections, one for the whole record
-	outputs    []output       // never empty: without outputs, one that always matches
-	named      bool           // outputs were configured
+	columnIdx  strMap[int] // column name -> index of the name
+	sections   []section   // never empty: without sections, one for the whole record
+	outputs    []output    // never empty: without outputs, one that always matches
+	named      bool        // outputs were configured
 	expose     []source
 
 	// rules
-	actions    map[string]*action // by source path
+	actions    strMap[*action] // by source path
 	merges     []merge
 	nslots     int
 	defaults   []defaultRule
-	defaultIdx map[string]int
+	defaultIdx strMap[int]
 
 	newline bool
 	simple  bool // Append is allowed
@@ -203,8 +203,8 @@ func newState(t *Transformer) *state {
 		t:           t,
 		derivedVals: make([][]byte, len(t.derived)),
 		condCache:   make([]int8, len(t.conds)),
-		reserved:    make([]int8, len(t.columnIdx)),
-		colWritten:  make([]bool, len(t.columnIdx)),
+		reserved:    make([]int8, t.columnIdx.len()),
+		colWritten:  make([]bool, t.columnIdx.len()),
 		groupOn:     make([]bool, len(t.aliasGroups)),
 		secOn:       make([]bool, len(t.sections)),
 		slots:       make([]*fastjson.Value, t.nslots),
@@ -628,8 +628,8 @@ func (s *state) visit(key []byte, v *fastjson.Value) {
 		}
 		seg = s.seg
 	}
-	if s.t.segAliases != nil {
-		if alias, ok := s.t.segAliases[string(seg)]; ok {
+	if s.t.segAliases.lens != 0 {
+		if alias, ok := s.t.segAliases.get(seg); ok {
 			seg = alias
 		}
 	}
@@ -651,7 +651,7 @@ func (s *state) elements(arr []*fastjson.Value) {
 // copied before anything below the node can reuse them.
 func (s *state) child(key, seg []byte, v *fastjson.Value) {
 	ls, ld := len(s.src), len(s.dst)
-	if s.t.actions != nil {
+	if s.t.actions.lens != 0 {
 		s.src = append(s.src, key...)
 	}
 	s.dst = append(s.dst, seg...)
@@ -661,8 +661,8 @@ func (s *state) child(key, seg []byte, v *fastjson.Value) {
 
 func (s *state) node(v *fastjson.Value) {
 	var act *action
-	if s.t.actions != nil {
-		act = s.t.actions[string(s.src)]
+	if s.t.actions.lens != 0 {
+		act, _ = s.t.actions.get(s.src)
 	}
 	if act == nil {
 		s.handle(v, nil)
@@ -760,7 +760,7 @@ func (s *state) collect(key []byte, v *fastjson.Value) {
 // empty: {"":{"a":1}} gives ".a". The caller's child truncates it away again.
 func (s *state) descend() {
 	s.depth++
-	if s.t.actions != nil {
+	if s.t.actions.lens != 0 {
 		s.src = append(s.src, '.')
 	}
 	s.dst = append(s.dst, s.t.sep...)
@@ -783,7 +783,7 @@ func (s *state) fixKey(key []byte) ([]byte, keyVerdict) {
 		if !s.groupOn[i] {
 			continue
 		}
-		if to, ok := t.aliasGroups[i].m[string(key)]; ok {
+		if to, ok := t.aliasGroups[i].m.get(key); ok {
 			key = to
 			break
 		}
@@ -804,14 +804,14 @@ func (s *state) fixKey(key []byte) ([]byte, keyVerdict) {
 // keyFilter is a set of output keys: exact names, and the prefixes of entries
 // that were written with a trailing *.
 type keyFilter struct {
-	exact    map[string]struct{}
+	exact    strMap[struct{}]
 	prefixes [][]byte
 }
 
-func (f *keyFilter) empty() bool { return len(f.exact) == 0 && len(f.prefixes) == 0 }
+func (f *keyFilter) empty() bool { return f.exact.len() == 0 && len(f.prefixes) == 0 }
 
 func (f *keyFilter) matches(key []byte) bool {
-	if _, ok := f.exact[string(key)]; ok {
+	if _, ok := f.exact.get(key); ok {
 		return true
 	}
 	for _, p := range f.prefixes {
@@ -829,7 +829,7 @@ func (s *state) claim(name []byte) bool {
 	if s.reservedBy(name) {
 		// The name belongs to an active column. That is never an error,
 		// whatever the collision policy.
-		if s.reserved[t.columnIdx[string(name)]] == nameReserved && !s.quiet {
+		if ci, _ := t.columnIdx.get(name); s.reserved[ci] == nameReserved && !s.quiet {
 			s.dropped++
 		}
 		return false
@@ -850,10 +850,10 @@ func (s *state) claim(name []byte) bool {
 
 // reservedBy reports whether an active column of this record owns name.
 func (s *state) reservedBy(name []byte) bool {
-	if s.t.columnIdx == nil {
+	if s.t.columnIdx.lens == 0 {
 		return false
 	}
-	ci, ok := s.t.columnIdx[string(name)]
+	ci, ok := s.t.columnIdx.get(name)
 	return ok && s.reserved[ci] != nameFree
 }
 
@@ -863,8 +863,8 @@ func (s *state) reservedBy(name []byte) bool {
 // Columns call it directly. They come first in a row and their names are
 // reserved, so nothing can have taken a column's key.
 func (s *state) writeKey(name []byte) {
-	if s.t.defaultIdx != nil {
-		if di, ok := s.t.defaultIdx[string(name)]; ok {
+	if s.t.defaultIdx.lens != 0 {
+		if di, ok := s.t.defaultIdx.get(name); ok {
 			s.seen[di] = true
 		}
 	}

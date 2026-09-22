@@ -310,7 +310,7 @@ func New(cfg Config) (*Transformer, error) {
 
 	t := c.t
 	t.newline = cfg.Newline
-	t.fixKeys = t.snake || t.segAliases != nil || len(t.aliasGroups) > 0 ||
+	t.fixKeys = t.snake || t.segAliases.lens != 0 || len(t.aliasGroups) > 0 ||
 		len(t.digitPrefix) > 0 || !t.keep.empty() || !t.drop.empty()
 	t.simple = t.explode == nil && !t.named
 	// A row can start as a copy of the previous one only when nothing is
@@ -411,7 +411,7 @@ type column struct {
 
 type aliasGroup struct {
 	when int
-	m    map[string][]byte
+	m    *strMap[[]byte]
 }
 
 type section struct {
@@ -707,18 +707,15 @@ func (c *compiler) derivedValue(name string, d Derive, idx int) (derived, error)
 
 func (c *compiler) columns() error {
 	t := c.t
-	if len(c.cfg.Columns) > 0 {
-		t.columnIdx = make(map[string]int, len(c.cfg.Columns))
-	}
 	for i, cfg := range c.cfg.Columns {
 		col, err := c.column(cfg)
 		if err != nil {
 			return fmt.Errorf("columns[%d]: %w", i, err)
 		}
-		idx, ok := t.columnIdx[cfg.To]
+		idx, ok := t.columnIdx.lookup(cfg.To)
 		if !ok {
-			idx = len(t.columnIdx)
-			t.columnIdx[cfg.To] = idx
+			idx = t.columnIdx.len()
+			t.columnIdx.set(cfg.To, idx)
 		}
 		col.nameIdx = idx
 		t.columns = append(t.columns, col)
@@ -770,9 +767,6 @@ func (c *compiler) keyPolicy() error {
 
 func (c *compiler) segmentAliases() error {
 	t := c.t
-	if len(c.cfg.Keys.SegmentAliases) > 0 {
-		t.segAliases = make(map[string][]byte, len(c.cfg.Keys.SegmentAliases))
-	}
 	for from, to := range c.cfg.Keys.SegmentAliases {
 		norm := from
 		if t.snake {
@@ -784,10 +778,10 @@ func (c *compiler) segmentAliases() error {
 		case norm == to:
 			return fmt.Errorf("keys.segment_aliases: %q is already %q", from, to)
 		}
-		if _, dup := t.segAliases[norm]; dup {
+		if _, dup := t.segAliases.lookup(norm); dup {
 			return fmt.Errorf("keys.segment_aliases: %q is listed twice", norm)
 		}
-		t.segAliases[norm] = []byte(to)
+		t.segAliases.set(norm, []byte(to))
 	}
 	return nil
 }
@@ -812,7 +806,7 @@ func (c *compiler) normKey(key string) string {
 func (c *compiler) aliases() error {
 	t := c.t
 	// Aliases without a condition form one group, which is tried last.
-	plain := map[string][]byte{}
+	plain := &strMap[[]byte]{}
 	for i, a := range c.cfg.Keys.Aliases {
 		group := plain
 		if a.When != nil {
@@ -820,27 +814,27 @@ func (c *compiler) aliases() error {
 			if err != nil {
 				return fmt.Errorf("keys.aliases[%d]: %w", i, err)
 			}
-			group = map[string][]byte{}
+			group = &strMap[[]byte]{}
 			t.aliasGroups = append(t.aliasGroups, aliasGroup{when: when, m: group})
 		}
 		if err := c.alias(a, group); err != nil {
 			return fmt.Errorf("keys.aliases[%d]: %w", i, err)
 		}
 	}
-	if len(plain) > 0 {
+	if plain.len() > 0 {
 		t.aliasGroups = append(t.aliasGroups, aliasGroup{when: -1, m: plain})
 	}
 	return nil
 }
 
-func (c *compiler) alias(a Alias, group map[string][]byte) error {
+func (c *compiler) alias(a Alias, group *strMap[[]byte]) error {
 	if a.To == "" {
 		return errors.New("to is empty")
 	}
 	if len(a.From) == 0 {
 		return errors.New("from is empty")
 	}
-	if _, isColumn := c.t.columnIdx[a.To]; isColumn {
+	if _, isColumn := c.t.columnIdx.lookup(a.To); isColumn {
 		return fmt.Errorf("%q is a column", a.To)
 	}
 	// An alias to a key that the filters remove would never be written.
@@ -862,10 +856,10 @@ func (c *compiler) alias(a Alias, group map[string][]byte) error {
 		case norm == a.To:
 			return fmt.Errorf("from %q is already %q", from, a.To)
 		}
-		if _, dup := group[norm]; dup {
+		if _, dup := group.lookup(norm); dup {
 			return fmt.Errorf("from %q is listed twice", from)
 		}
-		group[norm] = []byte(a.To)
+		group.set(norm, []byte(a.To))
 	}
 	return nil
 }
@@ -880,7 +874,7 @@ func (c *compiler) keyFilters() error {
 		return err
 	}
 	for _, entry := range k.Keep {
-		if _, dropped := t.drop.exact[entry]; dropped {
+		if _, dropped := t.drop.exact.lookup(entry); dropped {
 			return fmt.Errorf("keys.keep: %q is also in keys.drop", entry)
 		}
 	}
@@ -888,7 +882,7 @@ func (c *compiler) keyFilters() error {
 		if t.keep.empty() {
 			return errors.New("keys.rest: needs keys.keep; without a whitelist nothing is left out")
 		}
-		if _, isColumn := t.columnIdx[k.Rest]; isColumn {
+		if _, isColumn := t.columnIdx.lookup(k.Rest); isColumn {
 			return fmt.Errorf("keys.rest: %q is a column", k.Rest)
 		}
 		t.rest = []byte(k.Rest)
@@ -901,7 +895,6 @@ func compileKeyFilter(field string, entries []string) (keyFilter, error) {
 	if len(entries) == 0 {
 		return f, nil
 	}
-	f.exact = make(map[string]struct{}, len(entries))
 	seen := make(map[string]bool, len(entries))
 	for _, entry := range entries {
 		if entry == "" || entry == "*" {
@@ -914,20 +907,17 @@ func compileKeyFilter(field string, entries []string) (keyFilter, error) {
 		if prefix, ok := strings.CutSuffix(entry, "*"); ok {
 			f.prefixes = append(f.prefixes, []byte(prefix))
 		} else {
-			f.exact[entry] = struct{}{}
+			f.exact.set(entry, struct{}{})
 		}
 	}
 	return f, nil
 }
 
 func (c *compiler) action(path string) *action {
-	if c.t.actions == nil {
-		c.t.actions = map[string]*action{}
-	}
-	a := c.t.actions[path]
+	a, _ := c.t.actions.lookup(path)
 	if a == nil {
 		a = &action{}
-		c.t.actions[path] = a
+		c.t.actions.set(path, a)
 	}
 	return a
 }
@@ -1026,7 +1016,7 @@ func (c *compiler) addDefault(r Rule) error {
 	if len(r.Value) == 0 {
 		return fmt.Errorf("%q has no value", r.Path)
 	}
-	if _, dup := t.defaultIdx[r.Path]; dup {
+	if _, dup := t.defaultIdx.lookup(r.Path); dup {
 		return fmt.Errorf("%q has two defaults", r.Path)
 	}
 	// A RawMessage built in Go has not been through encoding/json.
@@ -1037,10 +1027,7 @@ func (c *compiler) addDefault(r Rule) error {
 	if err := json.Compact(&value, r.Value); err != nil {
 		return fmt.Errorf("%q: value: %w", r.Path, err)
 	}
-	if t.defaultIdx == nil {
-		t.defaultIdx = map[string]int{}
-	}
-	t.defaultIdx[r.Path] = len(t.defaults)
+	t.defaultIdx.set(r.Path, len(t.defaults))
 	t.defaults = append(t.defaults, defaultRule{key: []byte(r.Path), value: value.Bytes()})
 	return nil
 }
@@ -1048,7 +1035,7 @@ func (c *compiler) addDefault(r Rule) error {
 // dropped reports whether a drop rule covers path or anything above it.
 func (c *compiler) dropped(path []string) bool {
 	for n := 1; n <= len(path); n++ {
-		if a := c.t.actions[strings.Join(path[:n], ".")]; a != nil && a.drop {
+		if a, _ := c.t.actions.lookup(strings.Join(path[:n], ".")); a != nil && a.drop {
 			return true
 		}
 	}

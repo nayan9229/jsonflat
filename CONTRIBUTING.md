@@ -19,7 +19,11 @@ make all     # all of the above
 ```
 
 The tools run through `go run …@version`, so nothing needs installing beyond
-Go 1.24 or newer. A green `make all` means a green pull request.
+Go 1.24 or newer. CI does not run on pushes or pull requests; a maintainer
+starts the CI workflow by hand before a release, and the release run repeats
+every check. So a green `make all` on your branch is what the review relies
+on. (One difference: the runners have shellcheck, which actionlint uses on
+`run:` scripts in the workflows.)
 
 ## Pull requests
 

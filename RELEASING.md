@@ -9,7 +9,10 @@ right away.
 
 ## What the maintainer does
 
-1. Make sure `main` is green (the CI workflow on the last commit).
+1. Run the CI workflow on `main` and wait for green: Actions → CI → Run
+   workflow, or `gh workflow run CI --ref main && gh run watch`. It does not
+   run on its own; the release run repeats the same checks, but a red
+   release run leaves a tag behind that has to be moved.
 2. In `CHANGELOG.md`, move the entries under `## [Unreleased]` to a new heading
    with today's date, and add the compare links at the bottom:
 
@@ -59,10 +62,10 @@ right away.
 | **docs** | Generates `docs/changelog.md` and `docs/_data/release.yml`, builds `docs/` with Jekyll and deploys it to GitHub Pages. Runs only after **release** succeeded, so a failed release never publishes docs. |
 
 Every job after **validate** depends on it. **release** depends on all checks.
-The same five check jobs run in `ci.yml` for branches and pull requests; the
-commands live in `scripts/` and the `Makefile`, and `scripts/doc-check.sh`
-fails when the pinned tool versions differ between the two workflows and the
-Makefile.
+The same five check jobs make up `ci.yml`, which runs only when started by
+hand (`workflow_dispatch`); the commands live in `scripts/` and the
+`Makefile`, and `scripts/doc-check.sh` fails when the pinned tool versions
+differ between the two workflows and the Makefile.
 
 ## Fixing a bad release
 
@@ -122,9 +125,11 @@ Set by hand; a workflow cannot do these with the default token.
   `https://nayan9229.github.io/jsonflat/`.
 - **About**: the description and topics are at the top of `README.md` in an
   HTML comment.
-- **Branch protection** on `main`: require the CI workflow's jobs to pass,
-  require a pull request, no force pushes, no deletion. Optionally a **tag
-  protection rule** for `v*` so only maintainers can push release tags.
+- **Branch protection** on `main`: require a pull request, no force pushes,
+  no deletion. CI does not run on pull requests, so it cannot be a required
+  check; reviewers run `make all` or start the CI workflow on the branch
+  (`gh workflow run CI --ref <branch>`). Optionally a **tag protection rule**
+  for `v*` so only maintainers can push release tags.
 - **Discussions**: enable them, or remove that link from
   `.github/ISSUE_TEMPLATE/config.yml`.
 

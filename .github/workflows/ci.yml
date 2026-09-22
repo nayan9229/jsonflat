@@ -1,6 +1,7 @@
-# Development checks: every branch push and every pull request. Tags are
-# handled by release.yml alone; a `branches` filter without `tags` means tag
-# pushes never start this workflow.
+# Pre-release checks, run by hand: Actions → CI → Run workflow (on main), or
+# `gh workflow run CI --ref main`. Nothing starts it automatically; pushes and
+# pull requests are checked locally with `make all`, and every tag push runs
+# the same five jobs again in release.yml before anything is published.
 #
 # The five jobs below are the same in release.yml. The commands live in
 # scripts/ and the Makefile, and scripts/doc-check.sh fails when the pinned
@@ -8,9 +9,7 @@
 name: CI
 
 on:
-  push:
-    branches: ["**"]
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

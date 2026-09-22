@@ -25,7 +25,6 @@ Parquet and Athena.
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/nayan9229/jsonflat.svg)](https://pkg.go.dev/github.com/nayan9229/jsonflat)
 [![Release](https://github.com/nayan9229/jsonflat/actions/workflows/release.yml/badge.svg)](https://github.com/nayan9229/jsonflat/actions/workflows/release.yml)
-[![CI](https://github.com/nayan9229/jsonflat/actions/workflows/ci.yml/badge.svg)](https://github.com/nayan9229/jsonflat/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/nayan9229/jsonflat)](https://goreportcard.com/report/github.com/nayan9229/jsonflat)
 [![Go version](https://img.shields.io/github/go-mod/go-version/nayan9229/jsonflat)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)

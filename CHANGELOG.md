@@ -17,6 +17,8 @@ Release procedure (details in RELEASING.md):
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-22
+
 ### Added
 
 - `max_pooled_input`: the largest input whose per-call state is kept for
@@ -75,5 +77,6 @@ Release procedure (details in RELEASING.md):
   through its config, with an optional independent check of every row.
 - Fuzz targets `FuzzAppend` and `FuzzEach`, benchmarks, and examples.
 
-[Unreleased]: https://github.com/nayan9229/jsonflat/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/nayan9229/jsonflat/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/nayan9229/jsonflat/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nayan9229/jsonflat/releases/tag/v0.1.0

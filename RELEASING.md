@@ -55,7 +55,7 @@ right away.
 | **validate** | Tag matches `^v(0\|[1-9][0-9]*)\.(0\|[1-9][0-9]*)\.(0\|[1-9][0-9]*)$`; its major version matches the module path (`/vN` suffix, or none for 0 and 1); the tagged commit is on the default branch; `CHANGELOG.md` has exactly one `## [X.Y.Z] - YYYY-MM-DD` heading with content, which becomes the release notes; the `go` directive is not newer than the oldest Go in the test matrix. |
 | **lint** | `gofmt`, `go vet`, tidy `go.mod`/`go.sum`, staticcheck, govulncheck, actionlint, doc-comment audit (`scripts/doc-check.sh`). |
 | **test** | `go test` on Go 1.24 and stable (Linux), stable on macOS and Windows; race detector on Linux and macOS. |
-| **bench** | Every `BenchmarkAppend*` and `BenchmarkRudderEach` line must say `0 allocs/op` (`scripts/check-allocs.sh`). |
+| **bench** | Every `BenchmarkAppend*`, `BenchmarkRudderEach` and `BenchmarkEachParallel` line must say `0 allocs/op` (`scripts/check-allocs.sh`). |
 | **fuzz** | 30 s each of `FuzzAppend` and `FuzzEach`. |
 | **build** | `go build` plus cross-compilation for linux/amd64, linux/arm64, darwin/arm64, windows/amd64. |
 | **release** | Creates the GitHub Release (`jsonflat vX.Y.Z`, marked latest) from the changelog section plus an install line and the pkg.go.dev link; then `go list -m github.com/nayan9229/jsonflat@vX.Y.Z` against `proxy.golang.org` and a `sum.golang.org/lookup` request, so the version is indexed within minutes rather than when the first user asks for it. |

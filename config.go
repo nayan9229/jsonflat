@@ -52,6 +52,10 @@ type Config struct {
 	Expose   SourceList        `json:"expose,omitempty"`
 	// Newline appends "\n" to every record.
 	Newline bool `json:"newline,omitempty"`
+	// MaxPooledInput is the largest input, in bytes, whose per-call state is
+	// kept for reuse after the call. That state holds about eight times the
+	// input size, once per active P. 0 means 4 MiB.
+	MaxPooledInput int `json:"max_pooled_input,omitempty"`
 }
 
 // InputConfig says how one document becomes one or more records.
@@ -288,6 +292,9 @@ func MustCompile(config []byte) *Transformer {
 // New validates cfg and builds a Transformer from it. The Transformer keeps no
 // reference to cfg, so cfg can be changed and used again afterwards.
 func New(cfg Config) (*Transformer, error) {
+	if cfg.MaxPooledInput < 0 {
+		return nil, fmt.Errorf("jsonflat: config: max_pooled_input: %d is negative", cfg.MaxPooledInput)
+	}
 	c := &compiler{
 		cfg:        &cfg,
 		t:          &Transformer{},
@@ -316,6 +323,10 @@ func New(cfg Config) (*Transformer, error) {
 	// A row can start as a copy of the previous one only when nothing is
 	// written after the sections.
 	t.extend = len(t.merges) == 0 && len(t.defaults) == 0 && t.rest == nil
+	t.maxPooled = cfg.MaxPooledInput
+	if t.maxPooled == 0 {
+		t.maxPooled = maxPooledInput
+	}
 	t.pool.New = func() any { return newState(t) }
 	return t, nil
 }

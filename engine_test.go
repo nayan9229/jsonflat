@@ -216,6 +216,7 @@ func TestConfigValidation(t *testing.T) {
 		{"condition with two tests", `{"sections":[{"from":"x","when":{"path":"a","equals":"1","in":["2"]}}]}`},
 
 		{"empty inherit key", `{"input":{"inherit":[""]}}`},
+		{"negative max_pooled_input", `{"max_pooled_input":-1}`},
 		{"empty drop key", `{"keys":{"drop":[""]}}`},
 		{"drop key listed twice", `{"keys":{"drop":["a","a"]}}`},
 		{"empty keep key", `{"keys":{"keep":[""]}}`},

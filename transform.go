@@ -37,10 +37,19 @@ var (
 	ErrNotSimple = errors.New("jsonflat: the config can produce several rows; use Each")
 )
 
-// maxPooledInput is the largest input whose state goes back to the pool.
-// fastjson keeps memory in proportion to the largest document it has parsed,
-// so one huge document would otherwise pin that memory for good.
+// maxPooledInput is the default Config.MaxPooledInput: the largest input whose
+// state goes back to the pool. fastjson keeps memory in proportion to the
+// largest document it has parsed, about eight times its size, so one huge
+// document would otherwise pin that memory for good.
 const maxPooledInput = 4 << 20
+
+// A state that has seen one large document keeps buffers sized to it. When
+// the inputs that follow stay far below that peak, the state is dropped
+// instead of pooled, and the next call builds one sized to the traffic.
+const (
+	shrinkRatio = 8  // "far below": an input smaller than peak/shrinkRatio
+	shrinkAfter = 64 // consecutive such inputs before the state is dropped
+)
 
 // timeLayout is the layout of "$now" and clock_skew values.
 const timeLayout = "2006-01-02T15:04:05.000Z"
@@ -86,9 +95,10 @@ type Transformer struct {
 	defaults   []defaultRule
 	defaultIdx strMap[int]
 
-	newline bool
-	simple  bool // Append is allowed
-	extend  bool // a row may start as a copy of the previous row
+	newline   bool
+	simple    bool // Append is allowed
+	extend    bool // a row may start as a copy of the previous row
+	maxPooled int  // Config.MaxPooledInput, with the default applied
 
 	pool sync.Pool
 }
@@ -193,6 +203,9 @@ type state struct {
 	err     error
 	record  Record
 
+	peak  int // largest input this state has seen
+	small int // consecutive inputs far below peak; see worthPooling
+
 	// Method values are created once here. Creating one per call allocates.
 	visitFn    func(key []byte, v *fastjson.Value)
 	rawVisitFn func(key []byte, v *fastjson.Value)
@@ -226,9 +239,10 @@ func (s *state) begin(out []byte, opt Options) {
 }
 
 // release drops what points into the parsed document or to the caller and
-// returns the state to the pool.
+// returns the state to the pool, unless the input was too large to keep or
+// the state has outgrown the traffic.
 func (t *Transformer) release(s *state, inputLen int) {
-	if inputLen > maxPooledInput {
+	if inputLen > t.maxPooled || !s.worthPooling(inputLen) {
 		return
 	}
 	s.out = nil
@@ -238,6 +252,22 @@ func (t *Transformer) release(s *state, inputLen int) {
 	s.err = nil
 	s.record = Record{}
 	t.pool.Put(s)
+}
+
+// worthPooling records the input size and reports whether the state is still
+// a fair match for the traffic. After shrinkAfter inputs in a row below
+// peak/shrinkRatio it is not: its buffers, above all the parser's value
+// cache, are sized for documents that have stopped coming.
+func (s *state) worthPooling(inputLen int) bool {
+	switch {
+	case inputLen > s.peak:
+		s.peak, s.small = inputLen, 0
+	case inputLen*shrinkRatio < s.peak:
+		s.small++
+	default:
+		s.small = 0
+	}
+	return s.small < shrinkAfter
 }
 
 func (s *state) parse(src []byte) (*fastjson.Value, error) {

@@ -17,6 +17,36 @@ Release procedure (details in RELEASING.md):
 
 ## [Unreleased]
 
+### Added
+
+- `max_pooled_input`: the largest input whose per-call state is kept for
+  reuse; the default is 4 MiB, as before. A kept state that has seen one
+  large document is now dropped after 64 consecutive inputs below an eighth
+  of that size, so one burst of large documents no longer pins memory for
+  good.
+- Tests and benchmarks behind the concurrency and memory claims:
+  `TestSharedTransformerMixed` (16 goroutines mixing `Append`, `Each` and
+  `Options` on shared Transformers, under the race detector),
+  `TestRetainedRecordIsInvalid`, `BenchmarkEachParallel`,
+  `BenchmarkVarsShared`/`BenchmarkVarsPerCall`, and the report tests
+  `TestColdPoolReport`, `TestBurstReport`, `TestMemoryReport`,
+  `TestKeySetReport`. `Example_lazyCompile` shows `sync.OnceValues`.
+- `make profile`: CPU, memory, mutex and block profiles of the hot
+  benchmarks, top 20 of each.
+
+### Changed
+
+- Key lookups skip the hash when no entry has the key's length. `Append` is
+  16 % faster and the RudderStack preset 14 % faster on the benchmarks, still
+  at 0 allocs/op.
+
+### Fixed
+
+- Docs: zero allocations is reached on the third call of a fresh pooled
+  state, not the first. The performance page now carries measured numbers
+  for scaling across CPUs, the cost of an empty pool, and the memory one
+  state holds, including the 8× ratio to the largest input.
+
 ## [0.1.0] - 2026-09-22
 
 ### Added

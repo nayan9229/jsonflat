@@ -12,7 +12,9 @@ dependency.
    owned by the `Transformer`; append-style output; method values (`s.visit`)
    created once in `newState`; `m[string(b)]` lookups; paths split at compile
    time and passed to `Get(keys...)`; buffers resliced to `[:0]`;
-   `unsafe.String`/`unsafe.Slice` only for read-only views within one call.
+   `unsafe.String`/`unsafe.Slice` only for read-only views within one call;
+   `strMap` (a length bitmask in front of each small map) so that most key
+   lookups never hash.
 2. **Never use `MarshalTo` for strings or anything that can contain a string.**
    fastjson falls back to `strconv.AppendQuote`, which emits Go escapes that
    are not JSON. Use `appendQuoted` / `appendEscaped` / `appendRaw`.
@@ -33,13 +35,17 @@ dependency.
 11. **Never edit the acceptance tests** (`transform_test.go`,
     `features_test.go`, `preset_test.go`, `bench_test.go`, examples) to make
     them pass. If a vector looks wrong, stop and say why.
-12. State from an input above 4 MiB is not returned to the pool.
+12. State from an input above `max_pooled_input` (default 4 MiB) is not
+    returned to the pool, and a state is dropped after 64 consecutive inputs
+    below an eighth of its peak (`worthPooling`). A pooled state holds about
+    8× its largest input, once per active P; `TestMemoryReport` measures it.
 13. **No vendor-specific code in the package.** Vendor layouts are presets; a
     missing capability becomes a general config feature.
 
 Verbatim files, do not reformat: `internal/jsonenc/jsonenc.go`, `names.go`,
-the type declarations at the top of `config.go` (extended once, by
-`KeysConfig.Keep`), `presets/presets.go`, `presets/rudderstack.json`.
+the type declarations at the top of `config.go` (extended by
+`KeysConfig.Keep`, `KeysConfig.Rest` and `Config.MaxPooledInput`),
+`presets/presets.go`, `presets/rudderstack.json`.
 
 ## Working rules
 
@@ -61,6 +67,12 @@ the type declarations at the top of `config.go` (extended once, by
   `docs_test.go` compiles every ```json block and replays every ```example
   block, so update the docs with the code.
 - Do not tag releases; RELEASING.md is the maintainer's procedure.
+- A performance change needs a `benchstat -count=10` table in the commit
+  message and at least 5 % on a hot benchmark, unless it also simplifies the
+  code. The numbers in `docs/performance.md` come from the report tests
+  (`go test -run 'Report|Reuse|Shrinks' -v .`), the `-cpu` sweep of the
+  parallel benchmarks and `make profile`, and name the CPU, Go and fastjson
+  versions they were measured with.
 
 ## Commands that must all pass
 
@@ -71,7 +83,7 @@ gofmt -l .                                   # prints nothing
 go vet ./...
 go test -count=1 ./...
 go test -count=1 -race ./...
-go test -run xxx -bench . -benchmem .        # 0 allocs/op for Append*, RudderEach
+go test -run xxx -bench . -benchmem .        # 0 allocs/op for Append*, RudderEach, EachParallel
 go test -run xxx -fuzz 'FuzzAppend$' -fuzztime 60s .
 go test -run xxx -fuzz 'FuzzEach$'   -fuzztime 60s .
 grep -n "MarshalTo" *.go                     # numbers, true, false, null only

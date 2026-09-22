@@ -86,14 +86,20 @@ is the first item on the roadmap.
 ## Is a `Transformer` safe to share?
 
 Yes. It is immutable after `Compile`/`New` and safe for concurrent use by any
-number of goroutines. Compile once, share everywhere. `Options.Vars` maps are
-only read, so one map per route can be shared too. *`TestConcurrent`*
+number of goroutines. Compile once, share everywhere; a package-level
+`MustCompile` runs at init and needs no `sync.Once`, and for lazy compilation
+`sync.OnceValues` in your code is all it takes (`Example_lazyCompile`).
+`Options.Vars` maps are only read, so one map per route can be shared too.
+Scaling numbers and profiles are on the
+[performance page](performance#concurrency). *`TestConcurrent`,
+`TestSharedTransformerMixed`*
 
 ## How long is a `Record` valid?
 
 Until the callback returns. The `Record` and all of its slices (`Name`,
 `JSON`, `Fields`) belong to the pooled state and are reused for the next
-record. Copy what you keep. *`TestRecordIsACopy`*
+record, possibly by another goroutine. Copy what you keep.
+*`TestRecordIsACopy`, `TestRetainedRecordIsInvalid`*
 
 ## How are versions numbered?
 

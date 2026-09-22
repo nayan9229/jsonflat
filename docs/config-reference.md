@@ -30,7 +30,8 @@ compiled, and every `example` block is replayed, by `docs_test.go`.
   "rules":    [{"op": "drop", "path": "context.ip"}],
   "outputs":  [{"name": "$table"}],
   "expose":   ["messageId"],
-  "newline":  false
+  "newline":  false,
+  "max_pooled_input": 4194304
 }
 ```
 
@@ -756,6 +757,24 @@ examples on this site a trailing newline is written as `\n`.)
 ```example
 in:  {"a":1}
 out: {"a":1}\n
+```
+
+## `max_pooled_input`
+
+The largest input, in bytes, whose per-call state is kept for reuse after
+the call. Default `0`, which means 4 MiB. Negative is an error.
+
+A kept state holds about eight times the input size (the parser's value
+cache and a copy of the input), once per active P, until the next garbage
+collection or until the state has seen 64 inputs in a row below an eighth of
+its largest one, when it is dropped and rebuilt to size. Lower this when
+large documents are rare and memory matters more than rebuilding a state
+after one; details and measurements on the
+[performance page](performance#memory).
+*`TestMaxPooledInput`, `TestPoolShrinks`, `TestConfigValidation`*
+
+```json
+{"max_pooled_input": 1048576}
 ```
 
 ---

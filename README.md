@@ -230,14 +230,16 @@ are used exactly as given, after normalisation.
 ## Guarantees
 
 - **Zero heap allocations in `Append` and `Each` in the steady state**, which
-  means once the pooled state's buffers have grown to the size of your traffic.
-  `TestZeroAllocs`, `TestRudderZeroAllocs` and `TestKeepZeroAllocs` enforce it,
-  and the release workflow refuses a build whose benchmarks allocate.
+  means from the third call on a pooled state, once its buffers have grown to
+  the size of your traffic. `TestZeroAllocs`, `TestRudderZeroAllocs` and
+  `TestKeepZeroAllocs` enforce it, and the release workflow refuses a build
+  whose benchmarks allocate.
 - **The output is always valid JSON.** The package has its own RFC 8259
   string escaper and number check because the parser's are more lenient; a
   number such as `00` fails the record with `ErrInvalidNumber`. `FuzzAppend`
   and `FuzzEach` assert `json.Valid` on every output.
-- **A `Transformer` is immutable and safe for concurrent use.** `TestConcurrent`.
+- **A `Transformer` is immutable and safe for concurrent use.** `TestConcurrent`,
+  `TestSharedTransformerMixed`; see [Concurrency](#concurrency).
 - **The output never aliases the input**, and `Append` returns `dst` unchanged
   on error. `TestAppendKeepsPrefixAndInput`, `TestErrors`.
 - **All-or-nothing rows per record.** One bad record never fails the batch, and
@@ -249,9 +251,36 @@ are used exactly as given, after normalisation.
 Details, including memory behaviour and the 64-bit hash used for collision
 tracking, are on the [performance page](https://nayan9229.github.io/jsonflat/performance).
 
+## Concurrency
+
+Compile once, share everywhere. A `Transformer` is read-only after `Compile`
+or `New`; all per-call state lives in a `sync.Pool` it owns, so any number of
+goroutines can call `Append` and `Each` on the same one with no lock in the
+hot path. `TestSharedTransformerMixed` runs 16 goroutines mixing both methods
+and different `Options` under the race detector, and `BenchmarkAppendParallel`
+scales 3.9× on 4 cores and 6.1× on 10 (4 performance + 6 efficiency cores;
+tables on the [performance page](https://nayan9229.github.io/jsonflat/performance#concurrency)).
+
+- A package-level `var t = jsonflat.MustCompile(config)` runs at init, which
+  is once-only and goroutine-safe. No `sync.Once` is needed.
+- To compile lazily, for example from a file read on first use, wrap it in
+  your code: `sync.OnceValues(func() (*jsonflat.Transformer, error) { ... })`
+  (`Example_lazyCompile`).
+- `Options.Vars` is only read. Build one map per route and share it; a map
+  per call costs two allocations.
+- A `Record` and its slices are valid until the callback returns. After that
+  the pooled buffers are reused by the next call, possibly on another
+  goroutine (`TestRetainedRecordIsInvalid` shows the bytes change). Copy what
+  you keep.
+- Zero allocations is a steady-state property: the first two calls on a
+  freshly built pooled state allocate (17–42 KB in total), and a GC cycle
+  drops pooled states. A pooled state holds about 8× the largest input it has
+  seen; `max_pooled_input` and a shrink rule bound that (performance page).
+
 ## When not to use this
 
-- Documents above a few MB: the whole document is parsed into memory.
+- Documents above a few MB: the whole document is parsed into memory, and a
+  pooled state keeps about 8× that size.
 - Streaming from an `io.Reader`: the API takes a complete `[]byte` (read
   lines and call `Each` per line, as `example/` does).
 - You need to keep the nesting: this package only flattens.

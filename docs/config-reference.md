@@ -418,6 +418,8 @@ written without the brackets: `"from": "userId"` is `"from": ["userId"]`.
 | `"$now"` | `Options.Now` in UTC as `2006-01-02T15:04:05.000Z`; the zero time means `time.Now()`. Formatted at most once per call. |
 | `"$name"` | The derived value `name` if `derive` defines one, otherwise `Options.Vars["name"]`. An empty value counts as missing. |
 | `{"fn": "clock_skew", "sent": P1, "original": P2}` | `now - (sent - original)` in the `$now` layout, when both paths hold RFC 3339 strings; otherwise missing. Corrects timestamps taken on a client whose clock is off. |
+| `{"fn": "map", "from": S, "values": {...}, "else": V}` | The text of source `S` looked up in `values`. A hit is that entry's JSON value, any type; a miss is `else` when given, otherwise missing. Empty text, and a hit or `else` whose value is `""`, count as missing. |
+| `{"fn": "lower", "from": S}` | The text of source `S` in lower case (Unicode aware). |
 
 A list is tried in order and the first source with a value wins.
 
@@ -444,6 +446,57 @@ The client clock was an hour fast: it sent at 11:00:02 what the server received
 at 10:00:05.5, so the event happened 2 seconds before receipt, at 10:00:03.5.
 With `"sent":"garbage"` the function has no value and the list falls through
 to `orig`. *`TestClockSkew`*
+
+### `map` and `lower`
+
+`map` turns one text into another value and `lower` lowercases it. Both take
+`from`: a source path or a `$` variable (never another function). They are
+sources, so they work in a column, a `derive`, an `expose` or a condition,
+and they take part in fallback lists like any other source: a `map` without
+`else` that misses hands over to the next source.
+
+The text of a `map` value, for `equals`, `in`, `as: "string"` and the
+functions that read it, is the string itself, a number's text, or `true` /
+`false`; `null`, objects and arrays have no text. A column with `as: "raw"`
+writes the value as it stands in `values`, so a mapped `true` is a boolean in
+the row, not a string.
+
+```json
+{"columns": [
+   {"to": "device", "from": [{"fn": "map", "from": "dt", "values": {"1": "mobile", "4": "mobile", "2": "desktop", "3": "ctv"}},
+                             {"fn": "lower", "from": "dt"}]},
+   {"to": "origin", "from": {"fn": "map", "from": "fill", "values": {"local": "genuin", "pa": ""}, "else": "triton"}},
+   {"to": "muted", "from": {"fn": "map", "from": "mode", "values": {"auto_muted": true, "recovered_muted": true}}},
+   {"to": "os", "from": {"fn": "lower", "from": "$os"}}
+ ],
+ "sections": [{"from": "none"}]}
+```
+
+```example
+var os=Android
+in:  {"dt":"4","fill":"fresh","mode":"auto_muted"}
+out: {"device":"mobile","origin":"triton","muted":true,"os":"android"}
+```
+
+```example
+in:  {"dt":"CTV","fill":"local","mode":"gesture"}
+out: {"device":"ctv","origin":"genuin"}
+```
+
+```example
+in:  {"dt":"","fill":"pa"}
+out: {}
+```
+
+In the first row every lookup hits. In the second `CTV` is not in `values`, so
+the list falls through to `lower`; `gesture` misses a `map` without `else`, so
+`muted` is not written. In the third the empty `dt` has no text for either
+function, and `pa` maps to `""`, which counts as missing: the fill is known
+but its origin is not. *`TestMapAndLower`*
+
+Errors: `map` without `values`, with an empty `values`, or with a value that
+is not valid JSON; `map` or `lower` without `from`, or with a `from` that is
+not a path or a `$` variable; `sent` / `original` on either function.
 
 ## Conditions: `when`
 
@@ -544,7 +597,7 @@ when its `when` passes or it has none.
 |---|---|---|---|
 | `to` | output key | required | The column name. |
 | `from` | sources | required | In order of preference; the first with a value wins. |
-| `as` | `"raw"` \| `"string"` | `"raw"` | `raw`: a path source is written as it is, any type; `$` and `fn` sources are written as a JSON string. `string`: the text of the first source that has one, as a JSON string, so `"userId": 42` becomes `"42"`. |
+| `as` | `"raw"` \| `"string"` \| `"number"` \| `"bool"` | `"raw"` | `raw`: a path source is written as it is, any type; a `map` hit is written as the value in `values`; other `$` and `fn` sources are written as a JSON string. `string`: the text of the first source that has one, as a JSON string, so `"userId": 42` becomes `"42"`. `number`: the first source whose text is a valid JSON number, written as that number, so `"giv": "0.4"` becomes `0.4`. `bool`: the first source whose text is `true` or `false`, written as that boolean. |
 | `when` | condition | none | Condition for the column to be active. |
 | `quiet` | bool | `false` | Keys dropped in favour of this column are not counted in `Dropped`. |
 
@@ -579,6 +632,31 @@ out: {"o":{"k":[1]},"s":"1.50"}
 A raw column keeps the value's type; a string column needs text, so it skips
 the object and the boolean and takes the number.
 *`TestFlattenEdgeCases/"a raw column keeps the type, a string column needs text"`*
+
+`number` and `bool` read text, so they accept a string, a number, a `$`
+variable or a function alike, and skip a source whose text does not parse:
+
+```json
+{"columns": [
+   {"to": "brand", "from": ["$brand", "brand_id"], "as": "number"},
+   {"to": "volume", "from": "giv", "as": "number"},
+   {"to": "blocked", "from": "flag", "as": "bool"}
+ ],
+ "sections": [{"from": "none"}]}
+```
+
+```example
+var brand=3252
+in:  {"brand_id":"7","giv":"0.4","flag":"true"}
+out: {"brand":3252,"volume":0.4,"blocked":true}
+```
+
+```example
+in:  {"brand_id":"seven","giv":"loud","flag":"yes"}
+out: {}
+```
+
+*`TestAsNumberAndBool`*
 
 Two columns may share a name (for example one per condition); the first active
 one that has a value is written.

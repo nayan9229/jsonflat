@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nayan9229/jsonflat/internal/jsonenc"
 	"strings"
 
 	"github.com/valyala/fastjson"
@@ -34,8 +35,12 @@ const (
 
 	AsRaw    = "raw"    // column value is written as it is
 	AsString = "string" // strings and numbers are written as strings
+	AsNumber = "number" // the first text that is a JSON number, as a number
+	AsBool   = "bool"   // the first text that is true or false, as a boolean
 
 	FnClockSkew = "clock_skew"
+	FnMap       = "map"
+	FnLower     = "lower"
 )
 
 // Config describes a transformation. Every section is optional; an empty
@@ -175,13 +180,21 @@ type Cond struct {
 
 // Source is where a value comes from: a path in the record ("user.id"), a
 // variable ("$now", "$name" of a derived value, or a key of Options.Vars), or
-// a function ({"fn":"clock_skew","sent":"sentAt","original":"originalTimestamp"}).
-// Paths always use "." between segments.
+// a function ({"fn":"clock_skew","sent":"sentAt","original":"originalTimestamp"},
+// {"fn":"map","from":"dt","values":{"1":"mobile"},"else":"other"},
+// {"fn":"lower","from":"$os"}). Paths always use "." between segments.
 type Source struct {
 	Path     string `json:"-"`
 	Fn       string `json:"fn,omitempty"`
 	Sent     string `json:"sent,omitempty"`
 	Original string `json:"original,omitempty"`
+	// From is the path or "$" variable a map or lower reads.
+	From string `json:"from,omitempty"`
+	// Values maps the text of From to any JSON value (map).
+	Values map[string]json.RawMessage `json:"values,omitempty"`
+	// Else is the value of a map whose text is not in Values; absent, the
+	// source is missing on a miss.
+	Else json.RawMessage `json:"else,omitempty"`
 }
 
 // UnmarshalJSON accepts a string or a function object.
@@ -365,6 +378,8 @@ const (
 	srcDerived
 	srcVar
 	srcSkew
+	srcMap
+	srcLower
 )
 
 type condOp uint8
@@ -388,6 +403,29 @@ type source struct {
 	idx            int     // srcDerived
 	name           string  // srcVar
 	sent, original pathRef // srcSkew
+	from           *source // srcMap, srcLower: a path or variable source
+	values         *strMap[*mapValue]
+	elseVal        *mapValue // nil: a miss is missing
+}
+
+// mapValue is one entry of a map source: its compacted JSON and, when the
+// value is a string, a number or a boolean, its text.
+type mapValue struct {
+	raw     []byte
+	text    []byte
+	hasText bool
+}
+
+// derivedIdx is the derived value a source reads, directly or through its
+// from, or -1.
+func derivedIdx(src *source) int {
+	if src.kind == srcDerived {
+		return src.idx
+	}
+	if src.from != nil && src.from.kind == srcDerived {
+		return src.from.idx
+	}
+	return -1
 }
 
 type cond struct {
@@ -416,6 +454,8 @@ type column struct {
 	nameIdx  int // columns with the same name share one index
 	srcs     []source
 	asString bool
+	asNumber bool
+	asBool   bool
 	when     int
 	quiet    bool
 }
@@ -557,19 +597,92 @@ func (c *compiler) source(s Source) (source, error) {
 }
 
 func (c *compiler) function(s Source) (source, error) {
-	if s.Fn != FnClockSkew {
-		return source{}, fmt.Errorf("unknown function %q", s.Fn)
-	}
 	if s.Path != "" {
 		return source{}, errors.New("a source is a path or a function, not both")
 	}
-	if s.Sent == "" || s.Original == "" {
-		return source{}, fmt.Errorf("%s needs both sent and original", FnClockSkew)
+	switch s.Fn {
+	case FnClockSkew:
+		if s.From != "" || s.Values != nil || s.Else != nil {
+			return source{}, fmt.Errorf("%s takes sent and original only", FnClockSkew)
+		}
+		if s.Sent == "" || s.Original == "" {
+			return source{}, fmt.Errorf("%s needs both sent and original", FnClockSkew)
+		}
+		if s.Sent[0] == '$' || s.Original[0] == '$' {
+			return source{}, fmt.Errorf("%s takes paths, not variables", FnClockSkew)
+		}
+		return source{kind: srcSkew, sent: c.pathRef(s.Sent), original: c.pathRef(s.Original)}, nil
+	case FnMap, FnLower:
+		if s.Sent != "" || s.Original != "" {
+			return source{}, fmt.Errorf("sent and original need %s", FnClockSkew)
+		}
+		if s.From == "" {
+			return source{}, fmt.Errorf("%s needs from", s.Fn)
+		}
+		from, err := c.source(Source{Path: s.From})
+		if err != nil {
+			return source{}, fmt.Errorf("%s from: %w", s.Fn, err)
+		}
+		src := source{from: &from}
+		if s.Fn == FnLower {
+			if s.Values != nil || s.Else != nil {
+				return source{}, fmt.Errorf("%s takes from only", FnLower)
+			}
+			src.kind = srcLower
+			return src, nil
+		}
+		if len(s.Values) == 0 {
+			return source{}, fmt.Errorf("%s needs values", FnMap)
+		}
+		src.kind = srcMap
+		src.values = &strMap[*mapValue]{}
+		for k, raw := range s.Values {
+			mv, err := compileMapValue(raw)
+			if err != nil {
+				return source{}, fmt.Errorf("%s values[%q]: %w", FnMap, k, err)
+			}
+			src.values.set(k, mv)
+		}
+		if s.Else != nil {
+			mv, err := compileMapValue(s.Else)
+			if err != nil {
+				return source{}, fmt.Errorf("%s else: %w", FnMap, err)
+			}
+			src.elseVal = mv
+		}
+		return src, nil
 	}
-	if s.Sent[0] == '$' || s.Original[0] == '$' {
-		return source{}, fmt.Errorf("%s takes paths, not variables", FnClockSkew)
+	return source{}, fmt.Errorf("unknown function %q", s.Fn)
+}
+
+// compileMapValue stores one map value compacted, with its text when it has
+// one: a string's bytes, a number's text, or true / false.
+func compileMapValue(raw json.RawMessage) (*mapValue, error) {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return nil, err
 	}
-	return source{kind: srcSkew, sent: c.pathRef(s.Sent), original: c.pathRef(s.Original)}, nil
+	mv := &mapValue{raw: buf.Bytes()}
+	if len(mv.raw) == 0 {
+		return nil, errors.New("empty value")
+	}
+	switch mv.raw[0] {
+	case '"':
+		var str string
+		if err := json.Unmarshal(mv.raw, &str); err != nil {
+			return nil, err
+		}
+		mv.text, mv.hasText = []byte(str), true
+	case 't', 'f':
+		mv.text, mv.hasText = mv.raw, true
+	case 'n', '{', '[':
+	default:
+		if !jsonenc.ValidNumber(mv.raw) {
+			return nil, fmt.Errorf("not a JSON value: %s", mv.raw)
+		}
+		mv.text, mv.hasText = mv.raw, true
+	}
+	return mv, nil
 }
 
 // sources compiles a non-empty source list. It also returns the highest
@@ -585,8 +698,8 @@ func (c *compiler) sources(list SourceList) ([]source, int, error) {
 		if err != nil {
 			return nil, -1, err
 		}
-		if src.kind == srcDerived && src.idx > maxDerived {
-			maxDerived = src.idx
+		if d := derivedIdx(&src); d > maxDerived {
+			maxDerived = d
 		}
 		srcs = append(srcs, src)
 	}
@@ -743,6 +856,10 @@ func (c *compiler) column(cfg Column) (column, error) {
 	case "", AsRaw:
 	case AsString:
 		col.asString = true
+	case AsNumber:
+		col.asNumber = true
+	case AsBool:
+		col.asBool = true
 	default:
 		return column{}, fmt.Errorf("unknown as %q", cfg.As)
 	}

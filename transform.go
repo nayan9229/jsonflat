@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/nayan9229/jsonflat/internal/jsonenc"
 	"strconv"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/valyala/fastjson"
@@ -183,6 +186,7 @@ type state struct {
 	now      time.Time
 	nowBuf   []byte // "$now" as text; empty until first needed in a call
 	skewBuf  []byte
+	lowerBuf []byte // the text of a lower source
 
 	derivedVals [][]byte
 	condCache   []int8
@@ -599,14 +603,37 @@ func (s *state) writeColumns() {
 		}
 		for j := range c.srcs {
 			src := &c.srcs[j]
-			if c.asString || src.kind != srcPath {
+			switch {
+			case c.asNumber:
+				b, ok := s.text(src)
+				if !ok || !jsonenc.ValidNumber(b) {
+					continue
+				}
+				s.writeKey(c.name)
+				s.out = append(s.out, b...)
+			case c.asBool:
+				b, ok := s.text(src)
+				if !ok || (string(b) != "true" && string(b) != "false") {
+					continue
+				}
+				s.writeKey(c.name)
+				s.out = append(s.out, b...)
+			case !c.asString && src.kind == srcMap:
+				// The value as it stands in values; a mapped "" is missing.
+				mv, ok := s.mapValue(src)
+				if !ok || (mv.hasText && len(mv.text) == 0 && mv.raw[0] == '"') {
+					continue
+				}
+				s.writeKey(c.name)
+				s.out = append(s.out, mv.raw...)
+			case c.asString || src.kind != srcPath:
 				b, ok := s.text(src)
 				if !ok {
 					continue
 				}
 				s.writeKey(c.name)
 				s.out = appendQuoted(s.out, b)
-			} else {
+			default:
 				v := s.lookup(&src.path)
 				if v == nil {
 					continue
@@ -1144,15 +1171,69 @@ func (s *state) text(src *source) ([]byte, bool) {
 		return unsafe.Slice(unsafe.StringData(val), len(val)), true
 	case srcSkew:
 		return s.skew(src)
+	case srcMap:
+		mv, ok := s.mapValue(src)
+		if !ok || !mv.hasText || len(mv.text) == 0 {
+			return nil, false
+		}
+		return mv.text, true
+	case srcLower:
+		b, ok := s.text(src.from)
+		if !ok {
+			return nil, false
+		}
+		s.lowerBuf = appendLower(s.lowerBuf[:0], b)
+		return s.lowerBuf, len(s.lowerBuf) > 0
 	}
 	return nil, false
 }
 
+// mapValue resolves a map source: the entry the text of from selects, else
+// the else value. Empty text is a miss that else does not cover.
+func (s *state) mapValue(src *source) (*mapValue, bool) {
+	b, ok := s.text(src.from)
+	if !ok || len(b) == 0 {
+		return nil, false
+	}
+	if mv, hit := src.values.get(b); hit {
+		return mv, true
+	}
+	if src.elseVal != nil {
+		return src.elseVal, true
+	}
+	return nil, false
+}
+
+// appendLower appends b lowercased. ASCII stays byte for byte; other
+// characters go through unicode.ToLower, and an invalid byte becomes U+FFFD.
+func appendLower(dst, b []byte) []byte {
+	for i := 0; i < len(b); {
+		c := b[i]
+		if c < utf8.RuneSelf {
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			dst = append(dst, c)
+			i++
+			continue
+		}
+		r, n := utf8.DecodeRune(b[i:])
+		dst = utf8.AppendRune(dst, unicode.ToLower(r))
+		i += n
+	}
+	return dst
+}
+
 // present reports whether a source has a value of any type. It must not go
-// through text: an object has no text but does exist.
+// through text: an object has no text but does exist, and neither has a
+// mapped null.
 func (s *state) present(src *source) bool {
-	if src.kind == srcPath {
+	switch src.kind {
+	case srcPath:
 		return s.lookup(&src.path) != nil
+	case srcMap:
+		_, ok := s.mapValue(src)
+		return ok
 	}
 	_, ok := s.text(src)
 	return ok

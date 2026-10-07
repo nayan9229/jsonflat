@@ -17,6 +17,19 @@ Release procedure (details in RELEASING.md):
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-07
+
+### Added
+
+- `map` source: `{"fn": "map", "from": S, "values": {...}, "else": V}` looks
+  the text of a path or `$` variable up in `values` and yields that entry's
+  JSON value, any type; a miss yields `else` or, without one, is missing so a
+  fallback list continues. `lower` source: `{"fn": "lower", "from": S}`
+  lowercases the text. Both work wherever a source does: columns, `derive`,
+  `expose`, conditions.
+- `as: "number"` and `as: "bool"` on a column: the first source whose text
+  parses as a JSON number or boolean is written as that number or boolean.
+
 ## [0.2.0] - 2026-09-22
 
 ### Added
@@ -77,6 +90,7 @@ Release procedure (details in RELEASING.md):
   through its config, with an optional independent check of every row.
 - Fuzz targets `FuzzAppend` and `FuzzEach`, benchmarks, and examples.
 
-[Unreleased]: https://github.com/nayan9229/jsonflat/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/nayan9229/jsonflat/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/nayan9229/jsonflat/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nayan9229/jsonflat/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nayan9229/jsonflat/releases/tag/v0.1.0
